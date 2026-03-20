@@ -1,0 +1,511 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>AcroSport Vibe - Expert EPS</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
+        
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f8fafc;
+            touch-action: manipulation;
+        }
+
+        .canvas-container {
+            position: relative;
+            width: 100%;
+            height: 100%;
+            background: #eee;
+            overflow: hidden;
+            border-radius: 8px;
+            transition: box-shadow 0.2s;
+        }
+
+        /* Mode navigation : curseur loupe */
+        .mode-nav .canvas-container { cursor: zoom-in; }
+        
+        /* Mode dessin : curseur cible et bordure */
+        .mode-draw .canvas-container { 
+            cursor: crosshair; 
+            box-shadow: 0 0 0 3px #ef4444;
+        }
+
+        canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none; /* Désactivé par défaut pour laisser passer le clic au zoom/vidéo */
+        }
+
+        /* En mode dessin, le canvas capte les événements */
+        .mode-draw canvas {
+            pointer-events: auto;
+            touch-action: none;
+        }
+
+        .btn-draw-active {
+            background-color: #ef4444 !important;
+            color: white !important;
+        }
+
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+        
+        #zoom-overlay {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.95);
+            z-index: 100;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+
+        #zoom-content {
+            position: relative;
+            max-width: 95%;
+            max-height: 90%;
+            transition: transform 0.2s ease;
+        }
+    </style>
+</head>
+<body class="h-screen flex flex-col overflow-hidden mode-nav" id="app-body">
+
+    <!-- HEADER -->
+    <header class="bg-blue-700 text-white p-4 shadow-lg flex justify-between items-center shrink-0">
+        <div class="flex items-center gap-2">
+            <svg xmlns="http://www.w3.org/2000/svg" class="w-8 h-8" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
+            </svg>
+            <h1 class="text-xl font-bold tracking-tight uppercase italic">Acro-EPS <span id="mode-label" class="text-xs bg-blue-500 px-2 py-1 rounded-full not-italic">Élève</span></h1>
+        </div>
+        <div class="flex items-center gap-2">
+            <button id="toggle-draw" class="bg-blue-800 hover:bg-blue-900 px-4 py-2 rounded-lg transition-all border border-blue-500/30 flex items-center gap-2 text-xs font-bold uppercase">
+                <span id="draw-icon">✏️</span> <span id="draw-text">Dessiner</span>
+            </button>
+            <button id="admin-btn" class="bg-blue-800 hover:bg-blue-900 p-2 rounded-lg transition-colors">
+                <svg xmlns="http://www.w3.org/2000/svg" class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+                </svg>
+            </button>
+        </div>
+    </header>
+
+    <!-- MAIN CONTENT -->
+    <main class="flex-1 overflow-hidden flex flex-col md:flex-row p-2 gap-2">
+        <!-- LEFT: REFERENCE -->
+        <div class="flex-1 flex flex-col bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden relative">
+            <div class="bg-slate-100 p-2 text-sm font-semibold flex justify-between items-center uppercase tracking-wider text-slate-600">
+                <span>Référence</span>
+                <span id="figure-id-display" class="bg-slate-300 px-2 py-0.5 rounded text-[10px]">Figure #1</span>
+            </div>
+            <div id="reference-list" class="flex-1 overflow-y-auto p-2 space-y-4 flex flex-col items-center justify-center no-scrollbar"></div>
+            <div id="admin-ref-controls" class="hidden p-2 bg-slate-50 border-t flex flex-wrap gap-2 justify-center">
+                <input type="file" id="add-ref-input" accept="image/*,video/*" class="hidden" multiple>
+                <button onclick="document.getElementById('add-ref-input').click()" class="bg-green-600 text-white px-3 py-2 rounded text-xs font-bold uppercase">Ajouter</button>
+                <button id="btn-clear-ref" class="bg-red-500 text-white px-3 py-2 rounded text-xs font-bold uppercase">Vider</button>
+            </div>
+        </div>
+
+        <!-- RIGHT: STUDENT -->
+        <div class="flex-1 flex flex-col bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+            <div class="bg-slate-100 p-2 text-sm font-semibold flex justify-between items-center uppercase tracking-wider text-slate-600">
+                <span>Réalisations</span>
+                <button id="btn-camera" class="bg-blue-600 text-white text-xs px-3 py-1 rounded-lg uppercase font-bold flex items-center gap-1 shadow-md active:scale-95 transition-transform">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z"/></svg> Photo
+                </button>
+            </div>
+            <div id="student-photos-list" class="flex-1 overflow-y-auto p-2 space-y-4 no-scrollbar bg-slate-50"></div>
+        </div>
+    </main>
+
+    <!-- FOOTER -->
+    <footer class="bg-white border-t p-4 shrink-0">
+        <div id="validation-msg" class="text-[10px] text-center font-bold text-red-500 hidden uppercase tracking-widest mb-2 animate-pulse">
+            Validez tous les critères pour continuer
+        </div>
+        <div class="flex justify-between items-center w-full">
+            <button id="prev-btn" class="bg-slate-100 text-slate-400 px-6 py-3 rounded-xl font-bold uppercase text-xs disabled:opacity-30">Précédent</button>
+            <div class="font-bold text-slate-400 uppercase text-[10px] tracking-[0.2em]">Figure <span id="current-page" class="text-blue-600 text-base">1</span></div>
+            <button id="next-btn" class="bg-blue-600 text-white px-6 py-3 rounded-xl font-bold uppercase text-xs disabled:opacity-50">Suivant</button>
+        </div>
+    </footer>
+
+    <!-- LIGHTBOX (ZOOM) -->
+    <div id="zoom-overlay" onclick="closeZoom()">
+        <button class="absolute top-4 right-4 text-white bg-white/20 p-4 rounded-full hover:bg-white/40 z-[110]">
+            <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+        </button>
+        <div id="zoom-container" class="relative flex items-center justify-center w-full h-full" onclick="event.stopPropagation()">
+            <div id="zoom-content" class="shadow-2xl rounded-lg overflow-hidden flex items-center justify-center"></div>
+        </div>
+    </div>
+
+    <!-- MODALS -->
+    <div id="media-modal" class="fixed inset-0 bg-black/95 z-50 hidden flex flex-col items-center justify-center p-4">
+        <video id="webcam" autoplay playsinline class="max-w-full max-h-[70vh] rounded-lg border-2 border-white mb-6 hidden"></video>
+        <div class="flex gap-4">
+            <button id="take-photo" class="bg-blue-500 text-white p-6 rounded-full shadow-2xl active:scale-90">
+                <svg class="w-10 h-10" fill="currentColor" viewBox="0 0 20 20"><circle cx="10" cy="10" r="10"/></svg>
+            </button>
+            <button id="close-modal" class="bg-white text-black px-6 py-2 rounded-lg font-bold uppercase">Quitter</button>
+        </div>
+    </div>
+
+    <div id="admin-modal" class="fixed inset-0 bg-slate-900/90 flex items-center justify-center z-[60] hidden">
+        <div class="bg-white p-6 rounded-2xl w-80">
+            <h2 class="text-xl font-bold mb-4 text-center uppercase tracking-tighter">Code Enseignant</h2>
+            <input type="password" id="admin-pass" class="w-full border-2 p-4 rounded-xl text-center text-2xl mb-4" placeholder="••••">
+            <div class="flex gap-2">
+                <button id="admin-validate" class="flex-1 bg-blue-600 text-white py-3 rounded-xl font-bold uppercase">Entrer</button>
+                <button id="admin-close" class="flex-1 bg-slate-200 py-3 rounded-xl font-bold uppercase">Retour</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="summary-modal" class="fixed inset-0 bg-white z-[70] hidden flex flex-col">
+        <header class="bg-blue-900 text-white p-4 flex justify-between items-center shadow-lg">
+            <h2 class="text-lg font-bold uppercase tracking-widest">Bilan Final</h2>
+            <button id="summary-close" class="bg-white/20 px-4 py-2 rounded uppercase text-[10px] font-bold">Fermer</button>
+        </header>
+        <div id="summary-content" class="flex-1 overflow-y-auto p-4 space-y-10 no-scrollbar bg-slate-100"></div>
+    </div>
+
+    <script>
+        const DB_NAME = 'AcroSportDB_Final';
+        let db;
+        let appState = { isAdmin: false, isDrawing: false, currentPage: 1, figures: {} };
+        const CRITERIA = ["Bras tendus / Position stable", "Jambes verrouillées / Esthétique", "Alignement corps (dos droit)"];
+
+        async function initApp() {
+            db = await new Promise((res) => {
+                const req = indexedDB.open(DB_NAME, 1);
+                req.onupgradeneeded = (e) => e.target.result.createObjectStore('appData');
+                req.onsuccess = (e) => res(e.target.result);
+            });
+            const saved = await new Promise((res) => {
+                const req = db.transaction(['appData'], 'readonly').objectStore('appData').get('current');
+                req.onsuccess = (e) => res(e.target.result);
+            });
+            if (saved) {
+                appState = saved;
+                appState.isDrawing = false; // Reset drawing mode on load
+            }
+            updateUI();
+        }
+
+        async function saveState() {
+            const toSave = JSON.parse(JSON.stringify(appState));
+            toSave.isAdmin = false;
+            toSave.isDrawing = false;
+            db.transaction(['appData'], 'readwrite').objectStore('appData').put(toSave, 'current');
+        }
+
+        function updateUI() {
+            const current = appState.figures[appState.currentPage] || { refMedia: [], studentMedia: [] };
+            appState.figures[appState.currentPage] = current;
+
+            // Global Mode Classes
+            document.getElementById('app-body').className = `h-screen flex flex-col overflow-hidden ${appState.isDrawing ? 'mode-draw' : 'mode-nav'}`;
+            
+            // Draw Toggle UI
+            const drawBtn = document.getElementById('toggle-draw');
+            drawBtn.classList.toggle('btn-draw-active', appState.isDrawing);
+            document.getElementById('draw-text').textContent = appState.isDrawing ? 'Dessin Actif' : 'Dessiner';
+            document.getElementById('draw-icon').textContent = appState.isDrawing ? '✅' : '✏️';
+
+            document.getElementById('mode-label').textContent = appState.isAdmin ? 'Enseignant' : 'Élève';
+            document.getElementById('mode-label').className = `text-[10px] px-2 py-1 rounded-full ml-2 uppercase font-bold ${appState.isAdmin ? 'bg-red-500' : 'bg-blue-500'}`;
+            document.getElementById('admin-ref-controls').classList.toggle('hidden', !appState.isAdmin);
+            document.getElementById('current-page').textContent = appState.currentPage;
+
+            renderRefList(current.refMedia);
+            renderStudentList(current.studentMedia);
+
+            // Pagination logic
+            const hasPhotos = current.studentMedia.length > 0;
+            const validated = current.studentMedia.every(p => p.criteria.every(c => c));
+            document.getElementById('next-btn').disabled = !(appState.isAdmin || (hasPhotos && validated));
+            document.getElementById('validation-msg').classList.toggle('hidden', !hasPhotos || validated || appState.isAdmin);
+            document.getElementById('prev-btn').disabled = appState.currentPage === 1;
+
+            updateAdminControls();
+        }
+
+        function renderRefList(refMedia) {
+            const refList = document.getElementById('reference-list');
+            refList.innerHTML = '';
+            refMedia.forEach((m, i) => {
+                const wrap = createMediaWrapper(m, true, i, refMedia);
+                refList.appendChild(wrap);
+            });
+        }
+
+        function renderStudentList(studentMedia) {
+            const studentList = document.getElementById('student-photos-list');
+            studentList.innerHTML = '';
+            studentMedia.forEach((p, i) => {
+                const card = document.createElement('div');
+                card.className = "bg-white rounded-xl shadow border border-slate-100 overflow-hidden relative group";
+                
+                const wrap = createMediaWrapper(p, false, i, studentMedia);
+                
+                const critArea = document.createElement('div');
+                critArea.className = "p-3 space-y-1";
+                if(!p.criteria) p.criteria = [false, false, false];
+                CRITERIA.forEach((txt, ci) => {
+                    const label = document.createElement('label');
+                    const checked = p.criteria[ci];
+                    label.className = `flex items-center gap-2 p-1.5 rounded text-[10px] cursor-pointer ${checked ? 'bg-green-50 text-green-700' : 'text-slate-400'}`;
+                    label.innerHTML = `<input type="checkbox" ${checked ? 'checked' : ''} ${appState.isAdmin ? 'disabled' : ''} class="w-4 h-4"><span>${txt}</span>`;
+                    label.querySelector('input').onchange = (e) => { p.criteria[ci] = e.target.checked; saveState(); updateUI(); };
+                    critArea.appendChild(label);
+                });
+
+                const del = document.createElement('button');
+                del.className = "absolute top-2 right-2 bg-white/80 p-1.5 rounded-full text-red-500 opacity-0 group-hover:opacity-100 transition-opacity z-20";
+                del.innerHTML = '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>';
+                del.onclick = (e) => { e.stopPropagation(); studentMedia.splice(i, 1); saveState(); updateUI(); };
+                
+                card.append(wrap, critArea, del);
+                studentList.appendChild(card);
+            });
+        }
+
+        function createMediaWrapper(m, isRef, index, list) {
+            const wrap = document.createElement('div');
+            wrap.className = "relative w-full flex flex-col items-center group";
+            
+            const container = document.createElement('div');
+            container.className = "canvas-container shadow-md";
+            const size = m.size || 100;
+            container.style = `height: ${isRef ? '250px' : '220px'}; width: ${size}%`;
+
+            if (m.type === 'video') {
+                const v = document.createElement('video');
+                v.src = m.data;
+                v.className = "w-full h-full object-contain bg-black";
+                v.controls = !appState.isDrawing;
+                v.playsInline = true;
+                container.appendChild(v);
+            } else {
+                const img = new Image(); img.src = m.data; img.className = "w-full h-full object-contain";
+                container.appendChild(img);
+                container.onclick = () => { if(!appState.isDrawing) openZoom(m.data, m.drawing); };
+            }
+
+            const cvs = document.createElement('canvas');
+            container.appendChild(cvs);
+            wrap.appendChild(container);
+
+            // Gomme (uniquement en mode dessin)
+            if (appState.isDrawing && m.drawing) {
+                const clearDraw = document.createElement('button');
+                clearDraw.className = "absolute top-2 left-2 bg-red-600 text-white text-[10px] font-bold px-2 py-1 rounded shadow-lg z-30 uppercase";
+                clearDraw.textContent = "🗑️ Gomme";
+                clearDraw.onclick = (e) => {
+                    e.stopPropagation();
+                    m.drawing = null;
+                    const ctx = cvs.getContext('2d');
+                    ctx.clearRect(0,0,cvs.width,cvs.height);
+                    saveState();
+                    updateUI();
+                };
+                wrap.appendChild(clearDraw);
+            }
+
+            if (appState.isAdmin && isRef) {
+                const tools = document.createElement('div');
+                tools.className = "flex gap-2 mt-2";
+                tools.innerHTML = `<button class="text-[9px] bg-red-100 text-red-600 px-2 rounded uppercase font-bold" onclick="removeRef(${index})">X</button>
+                                   <input type="range" min="20" max="100" value="${size}" onchange="resizeRef(${index}, this.value)">`;
+                wrap.appendChild(tools);
+            }
+
+            setTimeout(() => initDrawing(cvs, m.drawing, (d) => { m.drawing = d; saveState(); updateUI(); }), 50);
+            return wrap;
+        }
+
+        // --- DRAWING ENGINE ---
+        function initDrawing(canvas, data, onEnd) {
+            const ctx = canvas.getContext('2d');
+            const parent = canvas.parentElement;
+            canvas.width = parent.clientWidth; canvas.height = parent.clientHeight;
+            if (data) { 
+                const img = new Image(); 
+                img.onload = () => ctx.drawImage(img, 0, 0, canvas.width, canvas.height); 
+                img.src = data; 
+            }
+            
+            let drawing = false; 
+            ctx.strokeStyle = "#ef4444"; 
+            ctx.lineWidth = 4; 
+            ctx.lineCap = "round";
+            ctx.lineJoin = "round";
+
+            const getPos = (e) => {
+                const r = canvas.getBoundingClientRect();
+                const x = (e.touches ? e.touches[0].clientX : e.clientX) - r.left;
+                const y = (e.touches ? e.touches[0].clientY : e.clientY) - r.top;
+                return [x, y];
+            };
+
+            const start = (e) => { 
+                if(!appState.isDrawing) return;
+                drawing = true; 
+                const [x,y] = getPos(e); 
+                ctx.beginPath(); 
+                ctx.moveTo(x,y); 
+            };
+            const move = (e) => { 
+                if(!drawing || !appState.isDrawing) return; 
+                const [x,y] = getPos(e); 
+                ctx.lineTo(x,y); 
+                ctx.stroke(); 
+            };
+            const stop = () => { 
+                if(!drawing) return; 
+                drawing = false; 
+                onEnd(canvas.toDataURL()); 
+            };
+
+            canvas.onmousedown = start; canvas.onmousemove = move; window.addEventListener('mouseup', stop);
+            canvas.ontouchstart = (e) => { if(appState.isDrawing) { e.preventDefault(); start(e); } };
+            canvas.ontouchmove = (e) => { if(appState.isDrawing) { e.preventDefault(); move(e); } };
+            canvas.ontouchend = stop;
+        }
+
+        // --- ZOOM ---
+        function openZoom(mediaData, drawingData, isVideo = false) {
+            const overlay = document.getElementById('zoom-overlay');
+            const content = document.getElementById('zoom-content');
+            content.innerHTML = '';
+            
+            if (isVideo) {
+                const v = document.createElement('video');
+                v.src = mediaData; v.controls = true; v.autoplay = true; v.className = "max-w-full max-h-screen rounded";
+                content.appendChild(v);
+            } else {
+                const container = document.createElement('div');
+                container.className = "relative flex items-center justify-center";
+                const img = document.createElement('img');
+                img.src = mediaData; img.className = "max-w-full max-h-[90vh] rounded shadow-2xl";
+                container.appendChild(img);
+                if (drawingData) {
+                    const canvasImg = document.createElement('img');
+                    canvasImg.src = drawingData;
+                    canvasImg.className = "absolute inset-0 w-full h-full object-contain pointer-events-none";
+                    container.appendChild(canvasImg);
+                }
+                content.appendChild(container);
+            }
+            overlay.style.display = 'flex';
+        }
+        function closeZoom() { document.getElementById('zoom-overlay').style.display = 'none'; }
+
+        // --- HANDLERS ---
+        document.getElementById('toggle-draw').onclick = () => {
+            appState.isDrawing = !appState.isDrawing;
+            updateUI();
+        };
+
+        function removeRef(i) { appState.figures[appState.currentPage].refMedia.splice(i, 1); saveState(); updateUI(); }
+        function resizeRef(i, v) { appState.figures[appState.currentPage].refMedia[i].size = v; saveState(); updateUI(); }
+        
+        document.getElementById('admin-btn').onclick = () => {
+            if (appState.isAdmin) { appState.isAdmin = false; updateUI(); }
+            else { document.getElementById('admin-modal').classList.remove('hidden'); document.getElementById('admin-pass').focus(); }
+        };
+        document.getElementById('admin-validate').onclick = () => {
+            if (document.getElementById('admin-pass').value === '1234') { appState.isAdmin = true; document.getElementById('admin-modal').classList.add('hidden'); updateUI(); }
+            document.getElementById('admin-pass').value = '';
+        };
+        document.getElementById('admin-close').onclick = () => document.getElementById('admin-modal').classList.add('hidden');
+
+        const video = document.getElementById('webcam');
+        document.getElementById('btn-camera').onclick = async () => {
+            document.getElementById('media-modal').classList.remove('hidden');
+            const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+            video.srcObject = stream; video.classList.remove('hidden');
+        };
+        document.getElementById('close-modal').onclick = () => {
+            const s = video.srcObject; if(s) s.getTracks().forEach(t => t.stop());
+            document.getElementById('media-modal').classList.add('hidden');
+        };
+        document.getElementById('take-photo').onclick = () => {
+            const c = document.createElement('canvas'); c.width = video.videoWidth; c.height = video.videoHeight;
+            c.getContext('2d').drawImage(video, 0, 0);
+            appState.figures[appState.currentPage].studentMedia.push({ data: c.toDataURL('image/jpeg', 0.6), drawing: null, criteria: [false,false,false] });
+            saveState(); document.getElementById('close-modal').click(); updateUI();
+        };
+
+        document.getElementById('add-ref-input').onchange = (e) => {
+            Array.from(e.target.files).forEach(f => {
+                const r = new FileReader(); r.readAsDataURL(f);
+                r.onload = (ev) => {
+                    appState.figures[appState.currentPage].refMedia.push({ type: f.type.startsWith('video')?'video':'image', data: ev.target.result, size: 100 });
+                    saveState(); updateUI();
+                };
+            });
+        };
+
+        document.getElementById('next-btn').onclick = () => { appState.currentPage++; updateUI(); };
+        document.getElementById('prev-btn').onclick = () => { if(appState.currentPage > 1) { appState.currentPage--; updateUI(); } };
+
+        function updateAdminControls() {
+            if (appState.isAdmin && !document.getElementById('summary-btn')) {
+                const b = document.createElement('button'); b.id="summary-btn"; b.className="bg-purple-600 text-white p-2 rounded ml-2 shadow";
+                b.innerHTML = '<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>';
+                b.onclick = showSummary;
+                document.querySelector('header .flex:last-child').prepend(b);
+            } else if(!appState.isAdmin) document.getElementById('summary-btn')?.remove();
+        }
+
+        function showSummary() {
+            const content = document.getElementById('summary-content'); content.innerHTML = '';
+            Object.keys(appState.figures).sort((a,b)=>a-b).forEach(p => {
+                const fig = appState.figures[p];
+                if (!fig.studentMedia.length && !fig.refMedia.length) return;
+                const section = document.createElement('div');
+                section.className = "bg-white p-6 rounded-2xl shadow-xl border border-slate-200";
+                let html = `<div class="flex items-center justify-between mb-6 pb-2 border-b"><h3 class="text-xl font-black text-blue-900 uppercase">Figure #${p}</h3></div>`;
+                html += `<div class="grid grid-cols-1 xl:grid-cols-2 gap-8">`;
+                
+                html += `<div class="space-y-4"><h4 class="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Référence</h4><div class="grid grid-cols-2 gap-2">`;
+                fig.refMedia.forEach(m => {
+                    html += `<div class="relative bg-slate-50 rounded border p-1 cursor-zoom-in" onclick="openZoom('${m.data}', '${m.drawing || ''}', ${m.type==='video'})">
+                                ${m.type==='video' ? '<div class="h-24 bg-black flex items-center justify-center text-white text-[10px]">VIDEO</div>' : `<img src="${m.data}" class="h-24 w-full object-contain">`}
+                                <img src="${m.drawing || ''}" class="absolute inset-0 w-full h-full object-contain pointer-events-none">
+                             </div>`;
+                });
+                html += `</div></div>`;
+
+                html += `<div class="space-y-4"><h4 class="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Réalisations</h4><div class="grid grid-cols-2 gap-4">`;
+                fig.studentMedia.forEach((m, idx) => {
+                    const score = m.criteria.filter(c => c).length;
+                    html += `<div class="bg-slate-50 p-2 rounded-xl border border-slate-200 cursor-zoom-in" onclick="openZoom('${m.data}', '${m.drawing || ''}')">
+                                <div class="relative aspect-video mb-2">
+                                    <img src="${m.data}" class="w-full h-full object-cover rounded shadow-inner">
+                                    <img src="${m.drawing || ''}" class="absolute inset-0 w-full h-full object-contain pointer-events-none">
+                                    <div class="absolute bottom-1 right-1 bg-blue-600 text-white text-[8px] px-1.5 rounded-full">${score}/3</div>
+                                </div>
+                             </div>`;
+                });
+                html += `</div></div></div>`;
+                section.innerHTML = html; content.appendChild(section);
+            });
+            document.getElementById('summary-modal').classList.remove('hidden');
+        }
+
+        document.getElementById('summary-close').onclick = () => document.getElementById('summary-modal').classList.add('hidden');
+        window.onload = initApp;
+    </script>
+</body>
+</html>
